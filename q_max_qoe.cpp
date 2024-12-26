@@ -16,7 +16,6 @@
 #include <chrono>
 #include <cstdlib>
 
-
 // 环境类，模拟环境中的状态
 class Environment {
 public:
@@ -74,7 +73,7 @@ public:
         return distance;
     }
 
-    void add_user_link(int cur_id, vector<int> &fail, vector<string> &satellite_ids) {
+    bool add_user_link(int cur_id, vector<int> &fail, vector<string> &satellite_ids) {
         bool flag = false;
         int round = 8;
         auto matrix = info.matrix[current_time_slot];
@@ -108,15 +107,17 @@ public:
                 satellite_ids.push_back(tar);
             }
             double rate = 0, loss = 0;
-            flag = can_meet_link_requirements(current_time_slot, cur_id, satellite_ids, info, &rate, &loss, fail);
+            flag = can_meet_link_requirements(current_time_slot, cur_id, satellite_ids, info, &rate, &loss, fail, -1);
         }
 
         if (flag) {
             // Append the path to the links map
             info.links[current_time_slot][info.traffic[cur_id].id].emplace_back(satellite_ids, rtt);
             cout << "Traffic:" << info.traffic[cur_id].id << " 添加一条链路" << endl;
+            return true;
         } else {
             cout << "Traffic:" << info.traffic[cur_id].id << " 添加链路失败" << endl;
+            return false;
         }
     }
 };
@@ -124,19 +125,28 @@ public:
 // Q-learning 代理类
 class QLearningAgent {
 public:
+    int traffic_length;
     int num_actions;
     double learning_rate;
     double discount_factor;
     double exploration_rate;
     unordered_map<pair<int, int>, vector<double>, pair_hash> q_table; // Q表
-
+    // vector<int
+    std::vector<std::vector<std::vector<double> > > q_table1;
 
     unordered_map<pair<int, int>, int, pair_hash> max_values; //最终结果
+    unordered_map<pair<int, int>, int, pair_hash> fail_nums;
 
-     explicit QLearningAgent(int num_actions)
-        : num_actions(num_actions), learning_rate(0.1), discount_factor(0.9), exploration_rate(1.0){
-        q_table[make_pair(0, 0)] = vector<double>(num_actions, 0.0);
-        max_values.clear();
+    explicit QLearningAgent(int traffic_length, int num_actions)
+        : traffic_length(traffic_length), num_actions(num_actions), learning_rate(0.2), discount_factor(0.9),
+          exploration_rate(1.0) {
+        q_table1.resize(traffic_length); // Adjust based on the number of possible traffic_ids
+        for (int i = 0; i < traffic_length; ++i) {
+            q_table1[i].resize(num_actions); // Adjust based on the number of possible len values
+            for (int j = 0; j < num_actions; ++j) {
+                q_table1[i][j].resize(num_actions, 0.0); // Initialize actions for each state to 0
+            }
+        }
     }
 
     int choose_action(pair<int, int> state, int len) {
@@ -151,7 +161,8 @@ public:
         }
     }
 
-    void update(pair<int, int>state, int action, double reward, pair<int, int>next_state) {
+
+    void update(pair<int, int> state, int action, double reward, pair<int, int> next_state) {
         if (q_table.find(state) == q_table.end()) {
             q_table[state] = vector<double>(num_actions, 0.0); // 初始化 Q 表
         }
@@ -190,22 +201,19 @@ void process_time_slot(int length, int time_slot, Info info, const int episodes)
 
     //初始化
     Environment env(info);
-    QLearningAgent agent(info.num_actions);
+    QLearningAgent agent(info.num_actions, info.num_actions);
 
     for (int episode = 0; episode < episodes; ++episode) {
         env.reset(time_slot);
-        cout <<"time"<<time_slot<< "episode:" << episode << endl;
+        cout<< "length" << length  << "time" << time_slot << "episode:" << episode << endl;
         for (int i = 0; i < info.traffic.size(); ++i) {
             auto traffic = info.traffic[i];
             string src = traffic.src;
             string target = traffic.target;
             int traffic_id = traffic.id;
             double need_rate = traffic.rate;
-
-
-
             int len = env.get_available_links(traffic_id).size();
-            if (len==0) continue;
+            if (len == 0) continue;
             auto state = env.get_state(traffic_id, len);
             int action = agent.choose_action(state, len);
             double reward = -5;
@@ -220,16 +228,19 @@ void process_time_slot(int length, int time_slot, Info info, const int episodes)
                 auto rtt = available_links[action].rtt;
                 double rate, loss;
                 vector<int> fail = {-2, -2};
-                bool flag = can_meet_link_requirements(time_slot, i, selected_link, env.info, &rate, &loss, fail);
+                bool flag = can_meet_link_requirements(time_slot, i, selected_link, env.info, &rate, &loss, fail,
+                                                       episode);
                 if (flag) {
                     update_link(time_slot, selected_link, rate, env.info);
                     reward = env.get_reward(rate, need_rate, rtt * 2 / global_C_light, loss);
                 } else {
-                    if (len < env.info.num_actions) {
+                    if (len < env.info.num_actions ) {
                         if ((fail[1] == 0 && info.users.contains(src)) || (
                                 fail[1] == selected_link.size() - 1 && info.users.contains(src))) {
                         } else {
-                            env.add_user_link(i, fail, selected_link);
+                            if (!env.add_user_link(i, fail, selected_link)) {
+                                agent.fail_nums[state]++;
+                            }
                         }
                     }
                 }
@@ -241,22 +252,18 @@ void process_time_slot(int length, int time_slot, Info info, const int episodes)
         agent.exploration_rate = max(0.01, agent.exploration_rate * 0.9995); // 减少探索率
     }
 
-    // 输出最终的 Q 表
-    cout << "Final Q-Table:" << endl;
-    for (const auto &kv: agent.q_table) {
-        const auto &state = kv.first;
-        const auto &q_values = kv.second;
-        cout << "State (" << get<0>(state) << ", " << get<1>(state)  << "): ";
-        for (double q: q_values) {
-            cout << q << " ";
-        }
-        cout << endl;
-    }
     // 计算最大值
     agent.calculate_max_q();
     double QOE = 0;
     // 最终结果
-    string file = "result\\result_" + to_string(time_slot) + ".txt";
+    string path = "result" + to_string(length);
+    if (!filesystem::exists(path)) {
+        filesystem::create_directory(path);
+    }
+
+
+    string file = path + "\\result_" + to_string(time_slot) + ".txt";
+
     ofstream outFile(file);
     env.reset(time_slot);
     for (int i = 0; i < length; ++i) {
@@ -272,20 +279,22 @@ void process_time_slot(int length, int time_slot, Info info, const int episodes)
         double reward = 0;;
         // 获取链路，计算奖励
         auto available_links = env.get_available_links(traffic_id);
-        if (len>0 && action < len) {
+        if (len > 0 && action < len) {
             auto link = available_links[action];
             auto selected_link = link.path;
             auto rtt = available_links[action].rtt;
             double rate, loss;
             vector<int> fail = {-2, -2};
-            bool flag = can_meet_link_requirements(time_slot, i, selected_link, env.info, &rate, &loss, fail);
+            bool flag = can_meet_link_requirements(time_slot, i, selected_link, env.info, &rate, &loss, fail,
+                                                   episodes);
             if (flag) {
                 update_link(time_slot, selected_link, rate, env.info);
                 reward = env.get_reward(rate, need_rate, rtt * 2 / global_C_light, loss);
 
                 QOE += reward;
                 selected_link.insert(selected_link.begin(), src);
-                outFile << length << " " << "QOE " << time_slot << " " << traffic_id << " " << rate / need_rate << " "
+                outFile << length << " " << "QOE " << time_slot << " " << traffic_id << " " << rate / need_rate <<
+                        " "
                         << rtt * 2 / global_C_light << " " << loss << " " << reward << " " << joinWithCommas(
                             selected_link) << endl;
             } else {
@@ -297,38 +306,103 @@ void process_time_slot(int length, int time_slot, Info info, const int episodes)
                     << "inf" << " " << 1 << " " << 0 << " " << endl;
         }
     }
-    cout << QOE << endl;
+    cout <<"Total QOE"<< QOE << endl;
 }
 
 
+void process_time_slot_threaded(int length, int time_slot, Info info, const int episodes) {
+    process_time_slot(length, time_slot, info, episodes);
+}
+
+void appendFileContent(const filesystem::path& sourceFile, std::ofstream& targetFile) {
+    std::ifstream inputFile(sourceFile);
+    if (!inputFile.is_open()) {
+        std::cerr << "无法打开文件: " << sourceFile << std::endl;
+        return;
+    }
+
+    std::string line;
+    while (std::getline(inputFile, line)) {
+        targetFile << line << std::endl;  // 将每一行内容写入目标文件
+    }
+
+    inputFile.close();
+}
 
 
-// 主函数，启动计算
-int main() {
-    int start_time, end_time;
-    cin >> start_time >> end_time;
+void uniontxt(){
     filesystem::path current_path = filesystem::current_path();
     cout << "当前工作目录: " << current_path << endl;
-    int length = 1000;
-    int episodes = (length >= 800) ? 10000 : (length > 600) ? 5000 : 3500;
+    std::string targetFileName = "merged.txt";  // 目标文件
+    std::ofstream targetFile(targetFileName, std::ios::app);  // 以追加模式打开目标文件
 
-    Info info;
-    info.init(length, -1, current_path); // 假设info->init函数已经定义
-
-    auto start = chrono::high_resolution_clock::now();
-
-    for (int time = start_time; time < end_time; ++time) {
-        process_time_slot(length, time, info, episodes);
+    if (!targetFile.is_open()) {
+        std::cerr << "无法打开目标文件: " << targetFileName << std::endl;
+        return ;
     }
-    // process_time_slot(length, 0, info, episodes);
+
+    std::string dirPath = current_path.string() + "\\result\\";  // 当前目录，你可以修改为需要的目录路径
+    cout << dirPath << endl;
+    for (const auto& entry : filesystem::recursive_directory_iterator(dirPath)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".txt") {
+            std::cout << "正在处理文件: " << entry.path() << std::endl;
+            appendFileContent(entry.path(), targetFile);
+        }
+    }
+
+    targetFile.close();
+    std::cout << "所有文件内容已整合到 " << targetFileName << std::endl;
+}
+
+void calculate_all(filesystem::path current_path) {
+    for (int length = 100; length <= 850; length += 50) {
+        int episodes = (length >= 800) ? 15000 : (length > 600) ? 8000 : 7000;
+        Info info;
+        info.init(length, -1, current_path); // 假设info->init函数已经定义
+
+        auto start = chrono::high_resolution_clock::now();
+        for (int i = 0; i < 3; ++i) {
+            vector<thread> threads;
+            // Create a thread for each time_slot
+            for (int time = i; time < i*10+11; ++time) {
+                threads.emplace_back(process_time_slot_threaded, length, time, info, episodes);
+
+            }
+            for (auto &t: threads) {
+                t.join();
+            }
+            auto end = chrono::high_resolution_clock::now();
+            chrono::duration<double> elapsed = end - start;
+
+            cout << "Time measured: " << elapsed.count() << " seconds.\n";
+        }
+
+    }
+
+}
+// 主函数，启动计算
+int main() {
+    int choice;
+    cin >> choice;
+    filesystem::path current_path = filesystem::current_path();
+    cout << "当前工作目录: " << current_path << endl;
+    if (choice == 1) {
+        calculate_all(current_path);
+    }
+    else if (choice == 2) {
+        uniontxt();
+    }else {
+        int length = 100;
+        int episodes = (length >= 800) ? 15000 : (length > 600) ? 8000 : 4000;
+        Info info;
+        info.init(length, -1, current_path);
+        process_time_slot(length, 0, info, episodes);
+    }
 
 
-    auto end = chrono::high_resolution_clock::now();
-    chrono::duration<double> elapsed = end - start;
-    cout << "Time measured: " << elapsed.count() << " seconds.\n";
+
+
+
     return 0;
 }
 
-//
-// Created by TXW on 24-12-15.
-//

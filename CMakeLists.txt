@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 add_executable(c_new_qoe
         calculate.cpp
         calculate.h
-        ../cuda_cpp/resource.h
+        resource.h
         dijkstra.h
         dijkstra.cpp
         q_max_qoe.cpp

@@ -59,7 +59,7 @@ double calculate_qoe(double rate, double need_rate, double delay, double loss) {
     return QoE / 5.036678606218123 * 5;
 }
 
-bool can_meet_link_requirements(int time, int index, const vector<string>& selected_link, Info& info, double* rate, double* loss, vector<int>& unsatis) {
+bool can_meet_link_requirements(int time, int index, const vector<string>& selected_link, Info& info, double* rate, double* loss, vector<int>& unsatis,int episode) {
     double need_rate = info.traffic[index].rate;
     const  string src = info.traffic[index].src;
     string target = info.traffic[index].target;
@@ -73,7 +73,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
                 double distance = Distance3D(info.user_position[time][src].p, info.satellite_position[time][selected_link[i]].p);
                 snr = calculate_user_up_SNR(distance);
                 if (snr < 0) {
-                    cout << "user:" << src << "与卫星" << selected_link[i] << "的snr" << snr << " 小于0 \n";
+                    cout <<"Episode:"<<episode<< "user:" << src << "与卫星" << selected_link[i] << "的snr" << snr << " 小于0 \n";
                     unsatis[0] = -1;
                     unsatis[1] = 0;
                     return false;
@@ -91,7 +91,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
                 // 判断链路是否满足要求
                 if (info.satellite[time][selected_link[i]].remaining_user_up_capacity < *rate) {
                     if (info.satellite[time][selected_link[i]].remaining_user_up_capacity < *rate / 3) {
-                        cout << "Time:" << time << ", Traffic" << index << "," << selected_link[i] << "用户链路上行容量不足\n";
+                        cout <<"Episode:"<<episode<<", Time:" << time << "Traffic" << index << "," << selected_link[i] << "用户链路上行容量不足\n";
                         unsatis[0] = -1;
                         unsatis[1] = 0;
                         return false;
@@ -105,6 +105,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
                 // 地面站-卫星 上行
                 double distance = Distance3D(facility_position.at(src).p, info.satellite_position[time][selected_link[i]].p);
                 snr = calculate_user_up_SNR(distance); // 假设用相同的计算
+                *loss = calculate_loss(snr);
                 double calcu_rate = calculate_rate(snr, sat_antenna.FeedLink_UL_Bandwith);
                 if (calcu_rate > need_rate) {
                     *rate = need_rate;
@@ -117,7 +118,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
 
                 // 判断链路是否满足要求
                 if (info.satellite[time][selected_link[i]].remaining_faci_up_capacity < *rate) {
-                    cout << "Time:" << time << ", Traffic" << index << "," << selected_link[i] << "馈电链路上行容量不足\n";
+                    cout<<"Episode:"<<episode << "Time:" << time << ", Traffic" << index << "," << selected_link[i] << "馈电链路上行容量不足\n";
                     unsatis[0] = -1;
                     unsatis[1] = 0;
                     return false;
@@ -130,10 +131,10 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
                 double user_snr = calculate_user_up_SNR(distance);
                 double user_loss = calculate_loss(user_snr);
                 double need_power = calculate_sat_user_need_power(*rate, sat_antenna.UsrLink_DL_Bandwith, distance);
-                *loss = max(*loss, user_loss);
+                // *loss = max(*loss, user_loss);
 
                 if (info.satellite[time].at(selected_link[i - 1]).remaining_user_power < need_power) {
-                    cout << "Traffic" << index << ", " << selected_link[i - 1]
+                    cout <<"Episode:"<<episode<< "Traffic" << index << ", " << selected_link[i - 1]
                         << " 用户链路功率 " << info.satellite[time].at(selected_link[i - 1]).remaining_user_power
                         << " < " << need_power << "\n";
                     unsatis[0] = i - 1;
@@ -141,7 +142,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
                     return false;
                 }
                 if (info.satellite[time].at(selected_link[i - 1]).remaining_user_down_capacity < *rate) {
-                    cout << "Traffic" << index << ", " << selected_link[i - 1]
+                    cout<<"Episode:"<<episode << "Traffic" << index << ", " << selected_link[i - 1]
                         << " 用户链路容量 " << info.satellite[time].at(selected_link[i - 1]).remaining_user_down_capacity
                         << " < " << need_rate << "\n";
                     unsatis[0] = i - 1;
@@ -153,7 +154,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
             else if (!facility_name.contains(selected_link[i]) && !facility_name.contains(selected_link[i - 1])) {
                 // 如果是星间链路
                 if (info.satellite_link[time].at(selected_link[i - 1])[selected_link[i]].remain < *rate) {
-                    cout << "Time:" << time << ", Traffic" << index << "," << selected_link[i - 1] << "," << selected_link[i]
+                    cout<<"Episode:"<<episode << "Time:" << time << ", Traffic" << index << "," << selected_link[i - 1] << "," << selected_link[i]
                         << "星间链路容量不足\n";
                     unsatis[0] = i - 1;
                     unsatis[1] = i;
@@ -164,7 +165,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
             else if (!facility_name.contains(selected_link[i - 1]) &&
                      facility_name.contains(selected_link[i])) {
                 if (info.satellite[time].at(selected_link[i - 1]).remaining_faci_down_capacity < *rate) {
-                    cout << "Time:" << time << ", Traffic" << index << "," << selected_link[i - 1] << "馈电链路下行容量不足\n";
+                    cout <<"Episode:"<<episode<< "Time:" << time << ", Traffic" << index << "," << selected_link[i - 1] << "馈电链路下行容量不足\n";
                     unsatis[0] = i - 1;
                     unsatis[1] = i;
                     return false;
@@ -174,7 +175,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
                 double distance = Distance3D(facility_position.at(selected_link[i]).p, info.satellite_position[time].at(selected_link[i - 1]).p);
                 double need_power = calculate_sat_faci_need_power(*rate, sat_antenna.FeedLink_UL_Bandwith,distance);
                 if (info.satellite[time].at(selected_link[i - 1]).remaining_faci_power < need_power) {
-                    cout << "Time:" << time << ", Traffic" << index << "," << selected_link[i - 1] << "馈电链路功率不足\n";
+                    cout <<"Episode:"<<episode<< "Time:" << time << ", Traffic" << index << "," << selected_link[i - 1] << "馈电链路功率不足\n";
                     unsatis[0] = i - 1;
                     unsatis[1] = i;
                     return false;
@@ -185,7 +186,7 @@ bool can_meet_link_requirements(int time, int index, const vector<string>& selec
                      facility_name.contains(selected_link[i - 1])) {
 
                 if (info.satellite[time][selected_link[i]].remaining_faci_up_capacity < *rate) {
-                    cout << "Time:" << time << ", Traffic" << index << "," << selected_link[i] << "馈电链路上行容量不足\n";
+                    cout <<"Episode:"<<episode<< "Time:" << time << ", Traffic" << index << "," << selected_link[i] << "馈电链路上行容量不足\n";
                     unsatis[0] = i - 1;
                     unsatis[1] = i;
                     return false;

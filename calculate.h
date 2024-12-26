@@ -26,5 +26,5 @@ double calculate_sat_user_need_power(double rate, double bandwidth, double dista
 
 
 void update_link(int time, const vector<string>& selected_link, double need_capacity, Info& info);
-bool can_meet_link_requirements(int time, int index, const vector<string>& selected_link, Info& info, double* rate, double* loss, vector<int>& unsatis);
+bool can_meet_link_requirements(int time, int index, const vector<string>& selected_link, Info& info, double* rate, double* loss, vector<int>& unsatis,int episode);
 string joinWithCommas(const vector<string>& strings);
