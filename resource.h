@@ -18,20 +18,23 @@
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
+#include <iomanip>
+#include "dijkstra.h"
 
 using namespace std;
 
 // 常量定义
 constexpr double global_PI = 3.141592653589793;
-constexpr double global_C_light = 299792457.999999984;  // 光速
-constexpr double global_Re = 6378.1363e3;  // 地球半径（单位：米）
-constexpr double global_K = -228.6;  // 玻尔兹曼常数
-const unordered_set<string> facility_name = { "shanghai", "nanjing", "beijing", "hainan", "lasa", "ulu" };
+constexpr double global_C_light = 299792457.999999984; // 光速
+constexpr double global_Re = 6378.1363e3;              // 地球半径（单位：米）
+constexpr double global_K = -228.6;                    // 玻尔兹曼常数
+const unordered_set<string> facility_name = {"shanghai", "nanjing", "beijing", "hainan", "lasa", "ulu"};
 
-
-struct pair_hash {
+struct pair_hash
+{
     template <class T1, class T2>
-    std::size_t operator()(const std::pair<T1, T2>& pair) const {
+    std::size_t operator()(const std::pair<T1, T2> &pair) const
+    {
         return std::hash<T1>()(pair.first) ^ std::hash<T2>()(pair.second);
     }
 };
@@ -39,52 +42,56 @@ struct pair_hash {
 // CNR和FE表的定义
 constexpr double CNR_table[] = {
     -2.35, -1.24, -0.3, 1.00, 2.23, 3.10, 4.03, 5.18, 6.2, 7.91, 9.35, 10.69,
-    11.03, 12.89, 13.64, 14.28, 15.69, 16.05
-};
+    11.03, 12.89, 13.64, 14.28, 15.69, 16.05};
 
 constexpr double FE_table[] = {
     0.490243, 0.656448, 0.789412, 0.988858, 1.188304, 1.322253, 1.487473, 1.654663,
-    1.766451, 2.22, 2.47, 2.64, 3.1, 3.5, 3.9, 4.119540, 4.3, 4.4
-};
-static double CNR2FrequenceEff(const double CNR) {
+    1.766451, 2.22, 2.47, 2.64, 3.1, 3.5, 3.9, 4.119540, 4.3, 4.4};
+static double CNR2FrequenceEff(const double CNR)
+{
     if (CNR <= CNR_table[0])
         return 0;
-    int  i;
+    int i;
     for (i = 0; i < 18; ++i)
     {
-        if (CNR_table[i] > CNR)break;
+        if (CNR_table[i] > CNR)
+            break;
     }
-    return FE_table[i - 1]*1e6;
+    return FE_table[i - 1] * 1e6;
 }
 
-
 // 单个坐标的3D距离计算
-static double Distance3D(const  vector<double>& a) {
+static double Distance3D(const vector<double> &a)
+{
     return sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
 }
 
 // 个坐标点之间的3D距离计算
-static  double Distance3D(const  vector<double>& a, const  vector<double> &b) {
+static double Distance3D(const vector<double> &a, const vector<double> &b)
+{
     return sqrt((a[0] - b[0]) * (a[0] - b[0]) +
-        (a[1] - b[1]) * (a[1] - b[1]) +
-        (a[2] - b[2]) * (a[2] - b[2]));
+                (a[1] - b[1]) * (a[1] - b[1]) +
+                (a[2] - b[2]) * (a[2] - b[2]));
 }
 // 辅助数据结构
-class Data {
+class Data
+{
 public:
     vector<double> p;
     vector<double> v;
     vector<double> lla;
 
-    explicit Data(const vector<double>& p,
-        const vector<double>& v = vector<double>(),
-        const vector<double>& lla = vector<double>())
-        : p(p), v(v), lla(lla) {
+    explicit Data(const vector<double> &p,
+                  const vector<double> &v = vector<double>(),
+                  const vector<double> &lla = vector<double>())
+        : p(p), v(v), lla(lla)
+    {
     }
     Data() = default;
 };
 
-class Traffic {
+class Traffic
+{
 public:
     int id{};
     string src;
@@ -92,96 +99,102 @@ public:
     double rate{};
 
     // Constructor
-    Traffic(const int id, string  src, string  target, const double rate)
-        : id(id), src(std::move(src)), target(std::move(target)), rate(rate) {
+    Traffic(const int id, string src, string target, const double rate)
+        : id(id), src(std::move(src)), target(std::move(target)), rate(rate)
+    {
     }
 
     Traffic() = default;
 };
 
-class Sat_link {
+class Sat_link
+{
 public:
     double total{};
     double remain{};
 
     explicit Sat_link(double total) : total(total), remain(total) {}
 
-    void reset() {
+    void reset()
+    {
         remain = total;
     }
     Sat_link() = default;
 };
 
-class Path {
+class Path
+{
 public:
     vector<string> path;
     double rtt{};
 
-
-    Path(const vector<string>& path, const double rtt) : path(path), rtt(rtt) {}
+    Path(const vector<string> &path, const double rtt) : path(path), rtt(rtt) {}
     Path() = default;
 };
 
-class SatAntenna {
+class SatAntenna
+{
 public:
+    double UsrLink_DL_Frequency = 2000000000;
+    double UsrLink_DL_Bandwith = 60 * 1e6;
+    double UsrLink_DL_BeamNum = 48;
+    double UserLink_EIRP_density = 34; // dB W/MHz
+    double UserLink_DL_Gt = 38.5;      // dBi
+
     double UsrLink_UL_G_t = 1.1;
     double UsrLink_UL_Frequency = 30 * 1e9;
-    double UsrLink_UL_Bandwith = 50 * 1e6;
+    double UsrLink_UL_Bandwith = 40 * 1e6;
     double UsrLink_UL_BeamNum = 48;
-    double UsrLink_DL_Frequency = 2000000000;
-    double UsrLink_DL_Bandwith = 20 * 1e6;
-    double UsrLink_DL_BeamNum = 48;
-    double UserLink_EIRP_density = 34;  // dB W/MHz
-    double UserLink_DL_Gt = 30;  // dBi
 
     double FeedLink_UL_G_t = 13;
     double FeedLink_UL_Frequency = 30 * 1e9;
     double FeedLink_UL_Bandwith = 100 * 1e6;
     double FeedLink_DL_Frequency = 20 * 1e9;
-    double FeedLink_DL_Bandwith = 100 * 1e6;  // Hz
-    double FeedLink_EIRP_density = 4;  // dB W/MHz
-    double FeedLink_DL_Gt = 38.5;  // dBi
+    double FeedLink_DL_Bandwith = 100 * 1e6; // Hz
+    double FeedLink_EIRP_density = 4;        // dB W/MHz
+    double FeedLink_DL_Gt = 38.5;            // dBi
 
     double ISL_tx_capacity = 8000 * 1e6;
     double ISL_rx_capacity = 8000 * 1e6;
     string working_type = "TM";
-
-
 };
 
-class TerminalAntenna {
+class TerminalAntenna
+{
 public:
     // 直接赋值
-    double G_t = 34.2;  // 最大发送增益，单位：dB
-    double G_r = 34.2;  // 最大接收增益，单位：dB
-    double T = 150;     // 天线温度，单位：K
-    double NF = 7;      // 噪声，单位：dB
-    double f_UL = 20 * 1e9;  // 上行频点，单位���Hz
-    double f_DL = 20 * 1e9;  // 下行频点，单位：Hz
-    double Pt = 3.2;    // 发射机功率，单位：w
-    double EIRP = 39.1; // 等效全向辐射功率，单位：dBW/MHz
-    double G_T = 0;     // 接收系统性能因数，单位：dB/K
+    double G_t = 34.2;      // 最大发送增益，单位：dB
+    double G_r = 34.2;      // 最大接收增益，单位：dB
+    double T = 150;         // 天线温度，单位：K
+    double NF = 7;          // 噪声，单位：dB
+    double f_UL = 30 * 1e9; // 上行频点，单位���Hz
+    double f_DL = 20 * 1e9; // 下行频点，单位：Hz
+    double Pt = 2;          // 发射机功率，单位：w
+    // double EIRP = 39.1; // 等效全向辐射功率，单位：dBW/MHz
+    double G_T = 0; // 接收系统性能因数，单位：dB/K
 };
 
-class FacilityAntenna {
+class FacilityAntenna
+{
 public:
     // 直接赋值
-    double G_t = 43.2;    // 最大发送增益，单位：dB
-    double G_r = 39.7;    // 最大接收增益，单位：dB
+    double G_t = 43.2;       // 最大发送增益，单位：dB
+    double G_r = 39.7;       // 最大接收增益，单位：dB
     double BW_UL = 30 * 1e9; // 上行带宽分配，单位：Hz
     double BW_DL = 20 * 1e9; // 下行带宽分配，单位：Hz
-    double T = 150;       // 天线温度，单位：K
-    double NF = 1.2;      // 噪声，单位：dB
-    double f_UL = 30 * 1e9; // 上行频点，单位：Hz
-    double f_DL = 20 * 1e9; // 下行频点，单位：Hz
-    double Pt = 2;        // 发射机功率，单位：w
-    double EIRP = 0;      // 等效全向辐射功率，单位：dBW/MHz
-    double G_T = 0;       // 接收系统性能因数，单位：dB/K
+    double T = 150;          // 天线温度，单位：K
+    double NF = 1.2;         // 噪声，单位：dB
+    double f_UL = 30 * 1e9;  // 上行频点，单位：Hz
+    double f_DL = 20 * 1e9;  // 下行频点，单位：Hz
+    double Pt = 3.2;         // 发射机功率，单位：w
+    double EIRP = 0;         // 等效全向辐射功率，单位：dBW/MHz
+    double G_T = 0;          // 接收系统性能因数，单位：dB/K
 };
 const SatAntenna sat_antenna;
 const TerminalAntenna user_antenna;
 const FacilityAntenna fac_antenna;
-class Satellite {
+class Satellite
+{
 public:
     int id{};
     string name;
@@ -200,8 +213,9 @@ public:
     double remaining_user_power{};
     double remaining_faci_power{};
     Satellite() = default;
-    explicit Satellite(const vector<double>& p)
-        :total_use_power(1000), total_faci_power(1000) {
+    explicit Satellite(const vector<double> &p)
+        : total_use_power(1000), total_faci_power(1000)
+    {
         // 初始化
         this->total_user_up_capacity = cal_beam_center_up_link(p);
         this->total_user_down_capacity = cal_beam_center_down_link(p);
@@ -215,7 +229,8 @@ public:
         this->remaining_faci_power = total_faci_power;
     }
 
-    void reset() {
+    void reset()
+    {
         remaining_user_up_capacity = total_user_up_capacity;
         remaining_user_down_capacity = total_user_down_capacity;
         remaining_faci_down_capacity = total_faci_down_capacity;
@@ -224,30 +239,33 @@ public:
         remaining_faci_power = total_faci_power;
     }
 
-    static double cal_beam_center_up_link(const vector<double>& sat) {
-
+    static double cal_beam_center_up_link(const vector<double> &sat)
+    {
 
         // 计算自由空间损耗
         double Lp = 20 * log10(4 * global_PI * (Distance3D(sat) - global_Re) * sat_antenna.UsrLink_UL_Frequency / global_C_light);
         // 计算载噪比
-        double C_N = user_antenna.EIRP + sat_antenna.UsrLink_UL_G_t - Lp - global_K - 10 * log10(sat_antenna.UsrLink_UL_Bandwith);
-        return CNR2FrequenceEff(C_N) * sat_antenna.UsrLink_UL_Bandwith * 48/ 1e6;
+        double eirp = 10 * log10(user_antenna.Pt) + user_antenna.G_t;
+        double C_N = eirp + sat_antenna.UsrLink_UL_G_t - Lp - global_K - 10 * log10(sat_antenna.UsrLink_UL_Bandwith);
+        return CNR2FrequenceEff(C_N) * sat_antenna.UsrLink_UL_Bandwith * 48 / 1e6;
     }
 
-    static double cal_beam_center_down_link(const  vector<double>& sat) {
+    static double cal_beam_center_down_link(const vector<double> &sat)
+    {
         // 计算EIRP
         double EIRP = pow(10, (sat_antenna.UserLink_EIRP_density / 10.0));
         EIRP = 10 * log10(EIRP * sat_antenna.UsrLink_DL_Bandwith / 1e6);
         // 计算自由空间损耗
         double Lp = 20 * log10(4 * global_PI * (Distance3D(sat) - global_Re) * sat_antenna.UsrLink_DL_Frequency / global_C_light);
         // 计算噪声功率
-        double noise = 10 * log10(10) + 10 * log10(sat_antenna.UsrLink_DL_Bandwith)+ user_antenna.NF;
+        double noise = 10 * log10(10) + 10 * log10(sat_antenna.UsrLink_DL_Bandwith) + user_antenna.NF;
         // 计算载噪比
         double C_N = EIRP + user_antenna.G_r - Lp - global_K - noise;
         return CNR2FrequenceEff(C_N) * sat_antenna.UsrLink_DL_Bandwith * 48 / 1e6;
     }
 
-    static double cal_faci_beam_center_down_link(const  vector<double>& sat) {
+    static double cal_faci_beam_center_down_link(const vector<double> &sat)
+    {
         // 计算EIRP
         double EIRP = pow(10, sat_antenna.FeedLink_EIRP_density / 10.0);
         EIRP = 10 * log10(EIRP * sat_antenna.FeedLink_DL_Bandwith / 1e6);
@@ -257,33 +275,33 @@ public:
         // 计算载噪比
         double C_N = EIRP + fac_antenna.G_r - Lp - global_K - noise;
 
-        return CNR2FrequenceEff(C_N) * sat_antenna.FeedLink_DL_Bandwith *5/ 1e6;
+        return CNR2FrequenceEff(C_N) * sat_antenna.FeedLink_DL_Bandwith * 5 / 1e6;
     }
 
     // 计算上行链路的CNR和频率效率
-    static double cal_faci_beam_center_up_link(const  vector<double>& sat) {
+    static double cal_faci_beam_center_up_link(const vector<double> &sat)
+    {
         // 计算自由空间损耗
         double Lp = 20 * log10(4 * global_PI * (Distance3D(sat) - global_Re) * sat_antenna.FeedLink_UL_Frequency / global_C_light);
 
         // 计算载噪比
         double C_N = 10 * log10(fac_antenna.Pt) + fac_antenna.G_t + sat_antenna.FeedLink_UL_G_t - Lp - global_K - 10 * log10(sat_antenna.FeedLink_UL_Bandwith);
 
-        return CNR2FrequenceEff(C_N) * sat_antenna.FeedLink_UL_Bandwith *5/ 1e6;
+        return CNR2FrequenceEff(C_N) * sat_antenna.FeedLink_UL_Bandwith * 5 / 1e6;
     }
-
-
 };
 
 const unordered_map<string, Data> facility_position = {
-    {"shanghai",Data({-2847751.2850821805, 4651738.5544014331,3306400.0246972283})},
-    {"nanjing",Data({-2604132.68593206,4736841.10283461,3385497.98159804})},
-    {"beijing",Data({-2176280.657815475, 4382058.474235897, 4091739.9482194087})},
-    {"hainan",Data({-2036462.1147977512, 5672736.4802588429, 2087893.7795304032})},
-    {"lasa",Data({-113522.47828731654, 5545270.592883083, 3156627.3137886818})},
-    {"ulu",Data({191604.80967738523, 4598496.0708747767, 4416798.9852317292})},
+    {"shanghai", Data({-2847751.2850821805, 4651738.5544014331, 3306400.0246972283})},
+    {"nanjing", Data({-2604132.68593206, 4736841.10283461, 3385497.98159804})},
+    {"beijing", Data({-2176280.657815475, 4382058.474235897, 4091739.9482194087})},
+    {"hainan", Data({-2036462.1147977512, 5672736.4802588429, 2087893.7795304032})},
+    {"lasa", Data({-113522.47828731654, 5545270.592883083, 3156627.3137886818})},
+    {"ulu", Data({191604.80967738523, 4598496.0708747767, 4416798.9852317292})},
 };
 
-class Info {
+class Info
+{
 public:
     std::filesystem::path pathroot;
     std::vector<std::vector<std::vector<double>>> matrix;
@@ -298,19 +316,24 @@ public:
     unordered_map<int, unordered_map<int, vector<Path>>> links;
     vector<Traffic> traffic;
     unordered_set<string> users;
+
+    unordered_map<int, unordered_map<string, vector<string>>> facility_link;
+    unordered_map<int, unordered_map<string, vector<string>>> user_canlink;
+
     int num_users;
     int slot = -1;
     int num_time_slots;
     int num_actions = 20;
     int length = 0;
 
-    void init(int input_length, int input_slot,std::filesystem::path start_path) {
+    void init(int input_length, int input_slot, std::filesystem::path start_path)
+    {
         // 初始化
-        pathroot =find_root_directory(start_path);
+        pathroot = find_root_directory(start_path);
         num_time_slots = 31;
         num_users = input_length;
         slot = input_slot;
-        length = input_length;  // 别忘了设置 length
+        length = input_length; // 别忘了设置 length
         cout << "start" << endl;
         // 读取数据
         matrix = dijiskra_matrix_read();
@@ -324,100 +347,129 @@ public:
         satellite_link = satellite_link_read();
         satellite_link_copy = satellite_link;
         satellite_copy = satellite;
+
+        user_canlink = user_link_read();
+        facility_link = facility_link_read();
+
         cout << "over" << endl;
     }
 
-    static std::filesystem::path find_root_directory(std::filesystem::path start_path) {
+    static std::filesystem::path find_root_directory(std::filesystem::path start_path)
+    {
 
         std::filesystem::path current_path = start_path;
-        cout << "root" << current_path<< endl;
-        while (current_path != current_path.root_path()) {
+        cout << "root" << current_path << endl;
+        while (current_path != current_path.root_path())
+        {
             // 假设项目根目录包含名为 CMakeLists.txt 的文件
-            if (std::filesystem::exists(current_path / "CMakeLists.txt")) {
+            if (std::filesystem::exists(current_path / "CMakeLists.txt"))
+            {
                 return current_path;
             }
-            current_path = current_path.parent_path();  // 返回上级目录
+            current_path = current_path.parent_path(); // 返回上级目录
         }
 
-        return current_path;  // 如果未找到根目录，返回当前目录
+        return current_path; // 如果未找到根目录，返回当前目录
     }
-    static void parse_vector_from_string(const string& str, const regex& regex, vector<double>& vec) {
+    static void parse_vector_from_string(const string &str, const regex &regex, vector<double> &vec)
+    {
         smatch match;
-        if (regex_search(str, match, regex)) {
+        if (regex_search(str, match, regex))
+        {
             string basic_string = match[1].str();
             stringstream ss(basic_string);
             string item;
-            while (getline(ss, item, ',')) {
+            while (getline(ss, item, ','))
+            {
                 erase_if(item, ::isspace);
                 vec.push_back(stod(item)); // 将每个逗号分隔的子串转为 int
             }
-
         }
     }
 
-    static vector<int> parse_points(const string& points_str) {
+    static vector<int> parse_points(const string &points_str)
+    {
         vector<int> points;
         stringstream ss(points_str);
         string item;
-        while (getline(ss, item, ',')) {
+        while (getline(ss, item, ','))
+        {
             points.push_back(stoi(item));
         }
         return points;
     }
 
-    std::vector<std::vector<std::vector<double>>> dijiskra_matrix_read() {
+    std::vector<std::vector<std::vector<double>>> dijiskra_matrix_read()
+    {
         std::cout << "dijiskra_matrix_read……" << std::endl;
 
         std::vector<std::vector<std::vector<double>>> matrix;
         std::vector<std::vector<double>> current_layer;
-        std::filesystem::path file_path = "data\\matrix.csv";
+        std::filesystem::path file_path = "data/matrix.csv";
         std::filesystem::path full_path = pathroot / file_path;
         ifstream file(full_path);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             std::cerr << "Failed to open file!" << std::endl;
             return matrix;
         }
 
         std::string line;
-        while (std::getline(file, line)) {
-            line.erase(0, line.find_first_not_of(" \t"));
-            line.erase(line.find_last_not_of(" \t") + 1);
+        while (std::getline(file, line))
+        {
+            line.erase(0, line.find_first_not_of("\t"));
+            line.erase(line.find_last_not_of("\t") + 1);
+            size_t pos = line.find("\r");
+            if (pos != std::string::npos)
+            {
+                line.erase(pos, 1); // 移除 `\r`
+            }
 
-            if (line.empty()) {
-                if (!current_layer.empty()) {
+            if (line.empty())
+            {
+                if (!current_layer.empty())
+                {
                     matrix.push_back(current_layer);
                     current_layer.clear();
                 }
             }
-            else {
+            else
+            {
                 std::vector<std::string> row = split(line, ',');
                 std::vector<double> current_row;
-                for (const auto& item : row) {
-                    try {
+                for (const auto &item : row)
+                {
+                    try
+                    {
                         current_row.push_back(std::stof(item));
                     }
-                    catch (const std::invalid_argument& e) {
+                    catch (const std::invalid_argument &e)
+                    {
                         std::cerr << "Invalid number format in row: " << item << ", error: " << e.what() << std::endl;
                     }
                 }
                 current_layer.push_back(current_row);
             }
         }
-        if (!current_layer.empty()) {
+        if (!current_layer.empty())
+        {
             matrix.push_back(current_layer);
         }
+        std::cout << matrix[0].size() << endl;
         std::cout << "matrix_read已完成" << std::endl;
+        file.close();
         return matrix;
     }
 
-
-    unordered_map<int, unordered_map<string, Data>> user_position_read() {
+    unordered_map<int, unordered_map<string, Data>> user_position_read()
+    {
         cout << "user_position_read……" << endl;
         unordered_map<int, unordered_map<string, Data>> user_position;
-        std::filesystem::path file_path = "data\\terminal_p.txt";
+        std::filesystem::path file_path = "data/terminal_p.txt";
         std::filesystem::path full_path = pathroot / file_path;
         ifstream file(full_path);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             cerr << "无法打开文件: terminal_p.txt" << endl;
             return user_position;
         }
@@ -425,17 +477,22 @@ public:
         regex time_regex(R"('Time':(\d+))");
         regex terminal_regex(R"('Terminal':(\w+))");
         regex lla_regex(R"('LLA':\[(.*?)\])"); // 提取 LLA
-        regex p_regex(R"('P':\[(.*?)\])"); // 提取 P
-        regex v_regex(R"('V':\[(.*?)\])"); // 提取 V
+        regex p_regex(R"('P':\[(.*?)\])");     // 提取 P
+        regex v_regex(R"('V':\[(.*?)\])");     // 提取 V
 
-        while (getline(file, line)) {
+        while (getline(file, line))
+        {
             smatch match;
-            if (regex_search(line, match, time_regex)) {
+            if (regex_search(line, match, time_regex))
+            {
                 int time = stoi(match[1]);
-                if (time > num_time_slots) continue;
-                if (slot != -1 && (time < slot || time > slot)) continue;
+                if (time > num_time_slots)
+                    continue;
+                if (slot != -1 && (time < slot || time > slot))
+                    continue;
 
-                if (regex_search(line, match, terminal_regex)) {
+                if (regex_search(line, match, terminal_regex))
+                {
                     string Terminal = match[1];
 
                     vector<double> lla, p, v;
@@ -444,25 +501,30 @@ public:
                     parse_vector_from_string(line, p_regex, p);
                     parse_vector_from_string(line, v_regex, v);
 
-
-                    if (user_position.find(time) == user_position.end()) {
+                    if (user_position.find(time) == user_position.end())
+                    {
                         user_position[time] = {};
                     }
                     user_position[time][Terminal] = Data(p, v, lla);
                 }
             }
         }
+        std::cout << user_position[0].size() << endl;
+        std::cout << user_position[0]["car0"].p[0] << endl;
         cout << "user_position_read已完成" << endl;
+        file.close();
         return user_position;
     }
 
-    unordered_map<int, unordered_map<string, Data>> satellite_position_read() {
+    unordered_map<int, unordered_map<string, Data>> satellite_position_read()
+    {
         cout << "satellite_position_read……" << endl;
         unordered_map<int, unordered_map<string, Data>> satellite_position;
-        std::filesystem::path file_path = "data\\satellite_p.txt";
+        std::filesystem::path file_path = "data/satellite_p.txt";
         std::filesystem::path full_path = pathroot / file_path;
         ifstream file(full_path);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             cerr << "无法打开文件: satellite_p.txt" << endl;
             return satellite_position;
         }
@@ -472,40 +534,50 @@ public:
         regex p_regex(R"('P':\[(.*?)\])");
         regex v_regex(R"('V':\[(.*?)\])");
 
-        while (getline(file, line)) {
+        while (getline(file, line))
+        {
             smatch match;
-            if (regex_search(line, match, time_regex)) {
+            if (regex_search(line, match, time_regex))
+            {
                 int time = stoi(match[1]);
-                if (time > num_time_slots) continue;
-                if (slot != -1 && (time < slot || time > slot)) continue;
+                if (time > num_time_slots)
+                    continue;
+                if (slot != -1 && (time < slot || time > slot))
+                    continue;
 
-                if (regex_search(line, match, sat_name_regex)) {
+                if (regex_search(line, match, sat_name_regex))
+                {
                     string sat_name = match[1];
 
                     vector<double> p, v;
                     parse_vector_from_string(line, p_regex, p);
                     parse_vector_from_string(line, v_regex, v);
 
-                    if (satellite_position.find(time) == satellite_position.end()) {
+                    if (satellite_position.find(time) == satellite_position.end())
+                    {
                         satellite_position[time] = {};
                     }
                     satellite_position[time][sat_name] = Data(p, v);
                 }
             }
         }
-
+        std::cout << satellite_position[0].size() << endl;
+        std::cout << satellite_position[0]["satellite_0"].p[0] << endl;
         cout << "satellite_position_read已完成" << endl;
+        file.close();
         return satellite_position;
     }
 
-    unordered_map<int, unordered_map<string, unordered_map<string, Sat_link>>> satellite_link_read() {
+    unordered_map<int, unordered_map<string, unordered_map<string, Sat_link>>> satellite_link_read()
+    {
         cout << "satellite_link_read……" << endl;
         unordered_map<int, unordered_map<string, unordered_map<string, Sat_link>>> satellite_link;
 
-        std::filesystem::path file_path = "data\\satellite_link.txt";
+        std::filesystem::path file_path = "data/satellite_link.txt";
         std::filesystem::path full_path = pathroot / file_path;
         ifstream file(full_path);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             cerr << "无法打开文件: satellite_link.txt" << endl;
             return satellite_link;
         }
@@ -513,26 +585,32 @@ public:
         SatAntenna sat_antenna;
         regex point_regex(R"(\[([^\]]+)\])");
 
-
-        while (getline(file, line)) {
+        while (getline(file, line))
+        {
             smatch match;
-            if (regex_search(line, match, regex(R"('Time':(\d+))"))) {
+            if (regex_search(line, match, regex(R"('Time':(\d+))")))
+            {
                 int time = stoi(match[1]);
-                if (time > num_time_slots) {
+                if (time > num_time_slots)
+                {
                     continue;
                 }
-                if (slot != -1 && (time < slot || time > slot)) {
+                if (slot != -1 && (time < slot || time > slot))
+                {
                     continue;
                 }
 
-                if (regex_search(line, match, regex(R"('sat_name':(\w+))"))) {
+                if (regex_search(line, match, regex(R"('sat_name':(\w+))")))
+                {
                     string sat_name = match[1];
                     // 提取连接点
-                    if (regex_search(line, match, point_regex)) {
+                    if (regex_search(line, match, point_regex))
+                    {
                         string points_str = match[1].str();
                         vector<int> points = parse_points(points_str);
 
-                        for (auto point : points) {
+                        for (auto point : points)
+                        {
                             string sat = id_sat_map.at(point); // 使用at()来抛出异常如果键未找到
                             satellite_link[time][sat_name][sat] = Sat_link(sat_antenna.ISL_tx_capacity);
                         }
@@ -540,19 +618,23 @@ public:
                 }
             }
         }
-
+        std::cout << satellite_link[0].size() << endl;
+        std::cout << satellite_link[0]["satellite_0"].size() << endl;
+        std::cout << satellite_link[0]["satellite_0"]["satellite_1"].remain << endl;
         cout << "satellite_link_read已完成" << endl;
+        file.close();
         return satellite_link;
     }
 
-    void traffic_read(vector<Traffic>& traffic, unordered_set<string>& user) {
+    void traffic_read(vector<Traffic> &traffic, unordered_set<string> &user)
+    {
         cout << "traffic_read……" << endl;
 
-
-        std::filesystem::path file_path = "data\\traffic.txt";
+        std::filesystem::path file_path = "data/traffic.txt";
         std::filesystem::path full_path = pathroot / file_path;
         ifstream file(full_path);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             cerr << "无法打开文件: traffic.txt" << endl;
             return;
         }
@@ -565,19 +647,23 @@ public:
         regex rate_regex(R"('needrate':([\d.]+))");
 
         // Read the first 'length' lines from the file
-        for (size_t i = 0; i < length && getline(file, line); ++i) {
+        for (size_t i = 0; i < length && getline(file, line); ++i)
+        {
             smatch match;
 
             // Extract src_name
-            if (regex_search(line, match, src_regex)) {
+            if (regex_search(line, match, src_regex))
+            {
                 string src_name = match[1];
 
                 // Extract target_name
-                if (regex_search(line, match, target_regex)) {
+                if (regex_search(line, match, target_regex))
+                {
                     string target_name = match[1];
 
                     // Extract needrate
-                    if (regex_search(line, match, rate_regex)) {
+                    if (regex_search(line, match, rate_regex))
+                    {
                         double rate = stod(match[1]);
 
                         // Create Traffic object and add to vector
@@ -585,54 +671,67 @@ public:
                         id++;
 
                         // Add to user set based on src_name condition
-                        if (src_name.find("car") == string::npos) {
+                        if (src_name.find("car") == string::npos)
+                        {
                             user.insert(target_name);
                         }
-                        else {
+                        else
+                        {
                             user.insert(src_name);
                         }
                     }
                 }
             }
         }
-
+        cout << traffic.size() << endl;
+        cout << traffic[0].src << " " << traffic[0].rate << endl;
         cout << "traffic_read已完成" << endl;
+        file.close();
     }
 
-    void idmap_read(unordered_map<string, int>& sat_id_map, unordered_map<int, string>& id_sat_map, unordered_map<int, unordered_map<string, Satellite>>& satellite) {
+    void idmap_read(unordered_map<string, int> &sat_id_map, unordered_map<int, string> &id_sat_map, unordered_map<int, unordered_map<string, Satellite>> &satellite)
+    {
         cout << "idmap_read……" << endl;
 
-        std::filesystem::path file_path = "data\\satIdMap.txt";
+        std::filesystem::path file_path = "data/satIdMap.txt";
         std::filesystem::path full_path = pathroot / file_path;
         ifstream file(full_path);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             cerr << "无法打开文件: satIdMap.txt" << endl;
             return;
         }
 
         string line;
-        while (getline(file, line)) {
+        while (getline(file, line))
+        {
             std::istringstream iss(line);
             std::string key;
             int value;
 
-            if (iss >> key >> value) {
+            if (iss >> key >> value)
+            {
                 sat_id_map[key] = value;
                 id_sat_map[value] = key;
             }
 
-
-            if (facility_name.find(key) == facility_name.end() && value != -1) {
-                if (slot != -1) {
+            if (facility_name.find(key) == facility_name.end() && value != -1)
+            {
+                if (slot != -1)
+                {
                     int time = slot;
-                    if (satellite.find(time) == satellite.end()) {
+                    if (satellite.find(time) == satellite.end())
+                    {
                         satellite[time] = {};
                     }
                     satellite[time][key] = Satellite(satellite_position.at(time).at(key).p);
                 }
-                else {
-                    for (int time = 0; time < num_time_slots; ++time) {
-                        if (satellite.find(time) == satellite.end()) {
+                else
+                {
+                    for (int time = 0; time < num_time_slots; ++time)
+                    {
+                        if (satellite.find(time) == satellite.end())
+                        {
                             satellite[time] = {};
                         }
                         satellite[time][key] = Satellite(satellite_position.at(time).at(key).p);
@@ -642,27 +741,32 @@ public:
         }
 
         cout << "idmap_read已完成" << endl;
+        file.close();
     }
 
-    static vector<string> splitString( string& input, char delimiter) {
+    static vector<string> splitString(string &input, char delimiter)
+    {
         vector<string> result;
         stringstream ss(input);
         string token;
 
-        while (getline(ss, token, delimiter)) {
+        while (getline(ss, token, delimiter))
+        {
             result.push_back(token);
         }
         return result;
     }
 
-    unordered_map<int, unordered_map<int, vector<Path>>> link_read()  {
+    unordered_map<int, unordered_map<int, vector<Path>>> link_read()
+    {
         cout << "link_read……" << endl;
 
-        std::filesystem::path file_path = "data\\upadate_link_1000.txt";
+        std::filesystem::path file_path = "data/upadate_link_1000.txt";
         std::filesystem::path full_path = pathroot / file_path;
         ifstream file(full_path);
 
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             cerr << "无法打开文件 upadate_link_1000.txt" << endl;
             return links;
         }
@@ -673,35 +777,45 @@ public:
         regex path_regex(R"(\[([^\]]+)\])");
         regex rtt_regex(R"('rtt':([\d.]+))");
 
-        while (getline(file, line)) {
+        while (getline(file, line))
+        {
             smatch match;
 
             // 提取 time
-            if (regex_search(line, match, time_regex)) {
+            if (regex_search(line, match, time_regex))
+            {
                 int time = stoi(match[1].str());
 
-                if (time > num_time_slots) continue;
-                if (slot != -1 && time < slot) continue;
-                if (slot != -1 && time > slot) continue;
+                if (time > num_time_slots)
+                    continue;
+                if (slot != -1 && time < slot)
+                    continue;
+                if (slot != -1 && time > slot)
+                    continue;
 
                 // 提取 traffic_id
-                if (regex_search(line, match, traffic_id_regex)) {
+                if (regex_search(line, match, traffic_id_regex))
+                {
                     int traffic_id = stoi(match[1].str());
-                    if (traffic_id >= length) continue;
+                    if (traffic_id >= length)
+                        continue;
 
                     // 提取 path
-                    if (regex_search(line, match, path_regex)) {
+                    if (regex_search(line, match, path_regex))
+                    {
                         string path = match[1].str();
                         vector<string> satelliteVector = splitString(path, ',');
                         // 提取 rtt
-                        if (regex_search(line, match, rtt_regex)) {
+                        if (regex_search(line, match, rtt_regex))
+                        {
                             double rtt = stod(match[1].str());
-                            // rtt = rtt*pow(10,6);
                             // 确保字典结构
-                            if (links.find(time) == links.end()) {
+                            if (links.find(time) == links.end())
+                            {
                                 links[time] = {};
                             }
-                            if (links[time].find(traffic_id) == links[time].end()) {
+                            if (links[time].find(traffic_id) == links[time].end())
+                            {
                                 links[time][traffic_id] = {};
                             }
 
@@ -714,54 +828,53 @@ public:
         }
 
         file.close();
+        cout << links[0].size() << endl;
+        cout << links[0][0].size() << endl;
         cout << "link_read已完成" << endl;
         return links;
     }
 
-    unordered_map<int, unordered_map<string, vector<string>>> facility_link_read() {
+    unordered_map<int, unordered_map<string, vector<string>>> facility_link_read()
+    {
         cout << "facility_link_read..." << endl;
         unordered_map<int, unordered_map<string, vector<string>>> facility_link;
-
-        std::filesystem::path file_path = "data\\facility_link.txt";
+        std::filesystem::path file_path = "data/facility_link.txt";
         std::filesystem::path full_path = pathroot / file_path;
         ifstream file(full_path);
-        if (!file.is_open()) {
+        if (!file.is_open())
+        {
             cerr << "无法打开文件: facility_link.txt." << endl;
             return facility_link;
         }
 
         string line;
         regex time_regex("'Time':(\\d+)");
-        regex facility_regex("'facility':(\\w+)");
-        regex points_regex("\\[([^]]+)\\]");
+        regex facility_regex("'src':(\\w+)");
+        regex points_regex(R"(\[([^\]]+)\])");
 
-        while (getline(file, line)) {
+        while (getline(file, line))
+        {
             smatch match;
 
             // Parse 'Time'
-            if (!regex_search(line, match, time_regex)) {
+            if (!regex_search(line, match, time_regex))
+            {
                 continue;
             }
             int time = stoi(match[1].str());
-
-            if (time > num_time_slots) {
+            if (time > num_time_slots || (slot != -1 && time != slot))
                 continue;
-            }
-            if (slot != -1 && time < slot) {
-                continue;
-            }
-            if (slot != -1 && time > slot) {
-                continue;
-            }
 
             // Parse 'facility'
-            if (!regex_search(line, match, facility_regex)) {
+            if (!regex_search(line, match, facility_regex))
+            {
                 continue;
             }
             string facility = match[1].str();
 
             // Parse connection points
-            if (!regex_search(line, match, points_regex)) {
+            if (!regex_search(line, match, points_regex))
+            {
                 continue;
             }
             string points_str = match[1].str();
@@ -770,21 +883,220 @@ public:
             // Ensure dictionary structure
             facility_link[time][facility] = connection_points;
         }
-
+        cout << facility_link[0].size() << endl;
+        cout << facility_link[0]["ulu"].size() << endl;
         cout << "facility_link_read complete." << endl;
+        file.close();
         return facility_link;
     }
+    unordered_map<int, unordered_map<string, vector<string>>> user_link_read()
+    {
+        cout << "user_link_read..." << endl;
+        unordered_map<int, unordered_map<string, vector<string>>> user_link;
 
-    static vector<string> split(const string& str, char delimiter) {
+        std::filesystem::path file_path = "data/user_link.txt";
+        std::filesystem::path full_path = pathroot / file_path;
+        ifstream file(full_path);
+        if (!file.is_open())
+        {
+            cerr << "无法打开文件: user_link.txt." << endl;
+            return user_link;
+        }
+
+        string line;
+        regex time_regex("'Time':(\\d+)");
+        regex facility_regex("'src':(\\w+)");
+        regex points_regex(R"(\[([^\]]+)\])");
+
+        while (getline(file, line))
+        {
+            smatch match;
+
+            // Parse 'Time'
+            if (!regex_search(line, match, time_regex))
+            {
+                continue;
+            }
+            int time = stoi(match[1].str());
+            if (time > num_time_slots || (slot != -1 && time != slot))
+                continue;
+
+            // Parse 'facility'
+            if (!regex_search(line, match, facility_regex))
+            {
+                continue;
+            }
+            string facility = match[1].str();
+
+            // Parse connection points
+            if (!regex_search(line, match, points_regex))
+            {
+                continue;
+            }
+            string points_str = match[1].str();
+            vector<string> connection_points = split(points_str, ',');
+
+            // Ensure dictionary structure
+            user_link[time][facility] = connection_points;
+        }
+        cout << user_link[0]["car0"].size() << endl;
+
+        cout << "user_link complete." << endl;
+        file.close();
+        return user_link;
+    }
+    static vector<string> split(const string &str, char delimiter)
+    {
         vector<string> tokens;
         stringstream ss(str);
         string token;
-        while (getline(ss, token, delimiter)) {
+        while (getline(ss, token, delimiter))
+        {
             tokens.push_back(token);
         }
         return tokens;
     }
+
+    std::vector<std::vector<double>> update_matrix_func(const std::string &facility, const std::vector<std::string> &cur_facility_link, const std::vector<std::vector<double>> &cur_matrix)
+    {
+        // Copy the current matrix
+        std::vector<std::vector<double>> matrix = cur_matrix;
+
+        // Get the satellite ID for the facility
+        int f_id = sat_id_map.at(facility);
+
+        // Loop through the current facility links
+        for (const std::string &link : cur_facility_link)
+        {
+            // Get the satellite ID for each link
+            int link_id = sat_id_map.at(link);
+
+            // Set the matrix values to infinity for the links between facility and linked satellites
+            matrix[f_id][link_id] = INFINITY;
+            matrix[link_id][f_id] = INFINITY;
+        }
+
+        // Return the updated matrix
+        return matrix;
+    }
+    double calculate_min_link(const vector<vector<double>> &cur_matrix, const string &src, const string &target,
+                              vector<string> &path)
+    {
+        path.clear();
+        Dijskra dijkstra;
+        dijkstra.initGraph(cur_matrix);
+        int s = sat_id_map[src];
+        int t = sat_id_map[target];
+        double distance = dijkstra.dijskra(s, t);
+        if (distance == INFINITY)
+        {
+            return -1;
+        }
+        vector<int> path_id;
+        dijkstra.findWaypoint(path_id, s, t);
+        for (int node : path_id)
+        {
+            path.push_back(id_sat_map[node]);
+        }
+        return distance;
+    }
+
+    string joinWithCommas(const vector<string> &strings)
+    {
+        if (strings.empty())
+        {
+            return "";
+        }
+
+        ostringstream oss;
+        for (size_t i = 0; i < strings.size(); ++i)
+        {
+            oss << strings[i];
+            if (i != strings.size() - 1)
+            {
+                oss << ",";
+            }
+        }
+        return oss.str();
+    }
+    void calculate_all_link(int a)
+    {
+        string file = "upadate_link_1000_" + to_string(a) + ".txt";
+        ofstream outFile(file);
+        int mm[6][2] = {{0, 5}, {5, 10}, {10, 15}, {15, 20}, {20, 25}, {25, 31}};
+        // 遍历时间段
+        for (int time = mm[a][0]; time < mm[a][1]; ++time)
+        {
+            auto cur_matrix = matrix[time]; // 当前时间的矩阵
+
+            // 遍历所有的流量
+            for (int i = 0; i < length; ++i)
+            {
+                string src = traffic[i].src;
+                string target = traffic[i].target;
+                int traffic_id = traffic[i].id;
+
+                // 判断是从设施还是用户发起的流量
+                vector<string> src_links;
+                vector<string> target_links;
+                string user;
+                string faci;
+
+                if (facility_name.contains(src))
+                {
+                    // src 是设施
+                    src_links = facility_link[time][src];
+                    target_links = user_canlink[time][target];
+                    user = target;
+                    faci = src;
+                }
+                else
+                {
+                    // 否则 src 是用户
+                    src_links = user_canlink[time][src];
+                    target_links = facility_link[time][target];
+                    user = src;
+                    faci = target;
+                }
+
+                // 遍历源卫星和目标卫星的连接
+                for (const auto &src_sat : src_links)
+                {
+                    for (const auto &tar_sat : target_links)
+                    {
+                        // 更新矩阵
+                        auto update_matrix = update_matrix_func(faci, facility_link[time][faci], cur_matrix);
+
+                        // 计算最小 RTT 路径
+
+                        vector<string> path;
+                        double rtt = calculate_min_link(update_matrix, src_sat, tar_sat, path);
+                        if (rtt < INFINITY)
+                        {
+                            // 将目标添加到路径
+                            path.push_back(target);
+
+                            // 根据源和目标计算 RTT（根据不同的情况来计算）
+                            if (facility_name.find(src) != facility_name.end())
+                            {
+                                rtt += Distance3D(satellite_position[time][tar_sat].p, user_position[time][user].p);
+                                rtt += Distance3D(satellite_position[time][src_sat].p, facility_position.at(faci).p);
+                            }
+                            else
+                            {
+                                rtt += Distance3D(satellite_position[time][src_sat].p, user_position[time][user].p);
+                                rtt += Distance3D(satellite_position[time][tar_sat].p, facility_position.at(faci).p);
+                            }
+                        }
+                        outFile << "'Time':" << time << ",'traffic_id':" << traffic_id << ",'path':[" << joinWithCommas(path) << "]" << "'rtt':" << std::fixed << std::setprecision(0) << rtt << endl;
+
+                        // 可根据需要对路径和 RTT 进行记录或其他操作
+                        // 例如：calcu_path[time][i].push_back(path);
+                    }
+                }
+            }
+        }
+    }
 };
 
-
-#endif //RESOURCE_H
+#endif // RESOURCE_H
